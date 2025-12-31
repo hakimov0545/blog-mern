@@ -1,101 +1,78 @@
 import express from "express";
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import { PORT, DB_URL, JWT_SECRET } from "./constants/index.js";
-import { registerValidation } from "./validations/auth.js";
-import { validationResult } from "express-validator";
-import UserModel from "./models/user.js";
+import multer from "multer";
+import cors from "cors";
+
+import { PORT, DB_URL } from "./constants/index.js";
+import {
+	loginValidation,
+	registerValidation,
+} from "./validations/auth.js";
+
+import checkAuth from "./utils/checkAuth.js";
+import userController from "./controllers/user.controller.js";
+import postController from "./controllers/post.controller.js";
+import { createPostValidation } from "./validations/post.js";
+import handleValidationErrors from "./utils/handleValidationErrors.js";
 
 const app = express();
 
+const storage = multer.diskStorage({
+	destination: (_, __, cb) => {
+		cb(null, "uploads");
+	},
+	filename: (_, file, cb) => {
+		cb(null, file.originalname);
+	},
+});
+
+const upload = multer({
+	storage,
+});
+
 app.use(express.json());
+app.use(cors());
+app.use("/uploads", express.static("uploads"));
 
-app.post("/auth/login", async (req, res) => {
-	try {
-		const user = await UserModel.findOne({
-			email: req.body.email,
-		});
+app.post(
+	"/auth/login",
+	loginValidation,
+	handleValidationErrors,
+	userController.login
+);
+app.post(
+	"/auth/register",
+	registerValidation,
+	handleValidationErrors,
+	userController.register
+);
+app.get("/auth/me", checkAuth, userController.getMe);
 
-		if (!user) {
-			return res.status(404).json({
-				message: "User not found",
-			});
-		}
-
-		const isValidPass = bcrypt.compare(
-			req.body.password,
-			user._doc.passwordHash
-		);
-
-		if (!isValidPass) {
-			return res.status(400).json({
-				message: "Invalid login or password",
-			});
-		}
-
-		const token = jwt.sign(
-			{
-				_id: user._id,
-			},
-			JWT_SECRET,
-			{ expiresIn: "1d" }
-		);
-
-		const { passwordHash, ...userDto } = user._doc;
-
-		res.json({ ...userDto, token });
-	} catch (error) {
-		console.log(error);
-		res.status(500).json({
-			message: "Could not log in",
-		});
-	}
+app.post("/upload", checkAuth, upload.single("image"), (req, res) => {
+	res.json({
+		url: `/uploads/${req.file.originalname}`,
+	});
 });
 
-app.post("/auth/register", registerValidation, async (req, res) => {
-	try {
-		const errors = validationResult(req);
-		if (!errors.isEmpty()) {
-			return res.status(400).json(errors.array());
-		}
+app.get("/tags", postController.getLastTags);
 
-		const password = req.body.password;
-		const salt = await bcrypt.genSalt(10);
-		const hash = await bcrypt.hash(password, salt);
-
-		const doc = new UserModel({
-			email: req.body.email,
-			fullName: req.body.fullName,
-			avatarUrl: req.body.avatarUrl,
-			passwordHash: hash,
-		});
-
-		const user = await doc.save();
-
-		const token = jwt.sign(
-			{
-				_id: user._id,
-			},
-			JWT_SECRET,
-			{ expiresIn: "1d" }
-		);
-
-		const { passwordHash, ...userDto } = user._doc;
-
-		res.json({ ...userDto, token });
-	} catch (error) {
-		console.log(error);
-		res.status(500).json({
-			message: "Could not register",
-		});
-	}
-});
-
-app.get("/auth/me", (req, res) => {
-	try {
-	} catch (error) {}
-});
+app.get("/posts", postController.getAll);
+app.get("/posts/:id", postController.getById);
+app.post(
+	"/posts",
+	checkAuth,
+	createPostValidation,
+	handleValidationErrors,
+	postController.create
+);
+app.patch(
+	"/posts/:id",
+	createPostValidation,
+	checkAuth,
+	handleValidationErrors,
+	postController.update
+);
+app.delete("/posts/:id", checkAuth, postController.delete);
 
 const starter = async () => {
 	try {
